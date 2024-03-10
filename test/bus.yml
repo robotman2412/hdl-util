@@ -1,0 +1,41 @@
+
+bus_a:
+  type: asymmetric_bus
+  
+  controller: CPU
+  device:     MEM
+  
+  verify: {$ge: [latency, 0]}
+  
+  parameters:
+    latency:
+      desc:     Time from address to data.
+      default:  1
+    width:
+      desc:     Width of the data bus.
+      default:  8
+  
+  clock:
+    name: clk
+    type: ext_clock
+    edge: rising
+  
+  transaction:
+    type:     access_signal
+    signal:   re
+    stoptime: 0
+  
+  outputs:
+    re:
+      desc: Read enable
+    addr:
+      desc: Memory address
+      span: 8
+  
+  inputs:
+    data:
+      desc: Memory read data
+      span:
+        - $sub: [width, 1]
+        - 0
+      time: {$add: [1, latency]}

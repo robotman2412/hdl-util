@@ -1,0 +1,12 @@
+
+$sum:
+  - $prod: [1, 2, 3, 4]
+  - $clog2: 256
+  - $eq:
+    - $sub: [4, 1]
+    - $add: [2, 1]
+  - $and:
+    - $xorb: [5, 3]
+    - $or:
+      - $and: [is_ok, is_fine]
+      - $and: [$not: is_ok, $not: is_fine]
