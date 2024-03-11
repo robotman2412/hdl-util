@@ -1,6 +1,5 @@
-#!/usr/bin/env python3
 
-import yaml, math
+import yaml, math, sysverilog
 
 
 def reflect_repr(instance):
