@@ -16,14 +16,14 @@ bus_a:
       default:  8
   
   clock:
-    name: clk
-    type: ext_clock
-    edge: rising
+    type:     ext_clock
+    signal:   clk
+    edge:     rising
   
   transaction:
-    type:     access_signal
-    signal:   re
-    stoptime: 0
+    request:  re
+    accept:   1
+    stall:    0
   
   outputs:
     re:
@@ -35,7 +35,5 @@ bus_a:
   inputs:
     data:
       desc: Memory read data
-      span:
-        - $sub: [width, 1]
-        - 0
+      span: width
       time: {$add: [1, latency]}
