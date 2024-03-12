@@ -1,5 +1,6 @@
 
-import yaml, math, sysverilog
+import yaml, math
+from builder import builder
 
 
 def reflect_repr(instance):
@@ -31,6 +32,8 @@ class Operator:
     
     def build(self, args: list[str]):
         self.check_argc(len(args))
+        if type(self.builder) is function:
+            return self.builder(args)
         if self.builder[0] == '$':
             return self.builder + "(" + ", ".join(args) + ")"
         elif self.max_args == 1:
@@ -50,12 +53,12 @@ operators = {
     "$sum":   Operator("sum",   8,  "+",  sum),
     "$prod":  Operator("prod",  8,  "*",  _product),
     
-    "$sqrt":  Operator("sqrt",  10, "$sqrt",  lambda x: math.sqrt(x[0]), 1, 1),
-    "$clog2": Operator("clog2", 10, "$clog2", _clog2, 1, 1),
+    "$sqrt":  Operator("sqrt",  10, builder.o_sqrt,  lambda x: math.sqrt(x[0]), 1, 1),
+    "$clog2": Operator("clog2", 10, builder.o_clog2, _clog2, 1, 1),
     
-    "$not":   Operator("not",   10, "!",  lambda x: not x[0],      1, 1),
-    "$and":   Operator("and",   1,  "&&", lambda x: x[0] and x[1], 2, 2),
-    "$or":    Operator("or",    0,  "||", lambda x: x[0] or  x[1], 2, 2),
+    "$not":   Operator("not",   10, builder.o_not, lambda x: not x[0],      1, 1),
+    "$and":   Operator("and",   1,  builder.o_and, lambda x: x[0] and x[1], 2, 2),
+    "$or":    Operator("or",    0,  builder.o_or,  lambda x: x[0] or  x[1], 2, 2),
     
     "$notb":  Operator("notb",  0,  "~",  lambda x: ~x[0],         1, 1),
     "$andb":  Operator("andb",  4,  "&",  lambda x: x[0] &   x[1], 2, 2),
