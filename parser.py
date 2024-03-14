@@ -1,6 +1,5 @@
 
 import yaml, math
-from builder import builder
 
 
 def reflect_repr(instance):
@@ -32,8 +31,6 @@ class Operator:
     
     def build(self, args: list[str]):
         self.check_argc(len(args))
-        if type(self.builder) is function:
-            return self.builder(args)
         if self.builder[0] == '$':
             return self.builder + "(" + ", ".join(args) + ")"
         elif self.max_args == 1:
@@ -53,12 +50,11 @@ operators = {
     "$sum":   Operator("sum",   8,  "+",  sum),
     "$prod":  Operator("prod",  8,  "*",  _product),
     
-    "$sqrt":  Operator("sqrt",  10, builder.o_sqrt,  lambda x: math.sqrt(x[0]), 1, 1),
-    "$clog2": Operator("clog2", 10, builder.o_clog2, _clog2, 1, 1),
+    "$clog2": Operator("clog2", 10, "$clog2", _clog2, 1, 1),
     
-    "$not":   Operator("not",   10, builder.o_not, lambda x: not x[0],      1, 1),
-    "$and":   Operator("and",   1,  builder.o_and, lambda x: x[0] and x[1], 2, 2),
-    "$or":    Operator("or",    0,  builder.o_or,  lambda x: x[0] or  x[1], 2, 2),
+    "$not":   Operator("not",   10, "!",  lambda x: not x[0],      1, 1),
+    "$and":   Operator("and",   1,  "&&", lambda x: x[0] and x[1], 2, 2),
+    "$or":    Operator("or",    0,  "||", lambda x: x[0] or  x[1], 2, 2),
     
     "$notb":  Operator("notb",  0,  "~",  lambda x: ~x[0],         1, 1),
     "$andb":  Operator("andb",  4,  "&",  lambda x: x[0] &   x[1], 2, 2),
@@ -150,13 +146,14 @@ class Expression:
 
 class Parameter:
     __repr__ = reflect_repr
-    def __init__(self, desc: str, default: Expression):
+    def __init__(self, id: str, desc: str, default: Expression):
+        self.id      = id
         self.desc    = desc
         self.default = default
     
     @staticmethod
-    def parse(raw):
-        return Parameter(raw["desc"] if "desc" in raw else None, Expression.parse(raw["default"]))
+    def parse(id: str, raw: dict):
+        return Parameter(id, raw["desc"] if "desc" in raw else None, Expression.parse(raw["default"]))
 
 
 class Span:
@@ -164,6 +161,11 @@ class Span:
     def __init__(self, msb: Expression, lsb: Expression):
         self.msb   = msb
         self.lsb   = lsb
+    
+    def is_default(self) -> bool:
+        if self.msb.typ != "const" or self.lsb.typ != "const":
+            return False
+        return self.msb.args == 0 and self.lsb.args == 0
     
     @staticmethod
     def parse(raw):
@@ -177,7 +179,7 @@ class Span:
     
     @staticmethod
     def default():
-        return Span(0, 0)
+        return Span(Expression("const", 0), Expression("const", 0))
 
 
 class ClockSpec:
@@ -221,63 +223,59 @@ class TransSpec:
 
 class Signal:
     __repr__ = reflect_repr
-    def __init__(self, desc: str, span: Span, time: Expression):
+    def __init__(self, id: str, desc: str, span: Span, time: Expression, dir: str):
+        self.id   = id
         self.desc = desc
         self.span = span
         self.time = time
+        self.dir  = dir
     
     @staticmethod
-    def parse(raw):
-        if raw == None:
-            return Signal.default()
-        else:
-            return Signal(
-                raw["desc"] if "desc" in raw else None,
-                Span.parse(raw["span"]) if "span" in raw else Span.default(),
-                Expression.parse(raw["time"]) if "time" in raw else Expression("const", 0)
-            )
-    
-    @staticmethod
-    def default():
-        return Signal(None, Span.default(), Expression("const", 0))
+    def parse(id, raw):
+        if "dir" in raw:
+            assert raw["dir"] in ["input", "output"]
+        return Signal(
+            id,
+            raw["desc"] if "desc" in raw else None,
+            Span.parse(raw["span"]) if "span" in raw else Span.default(),
+            Expression.parse(raw["time"]) if "time" in raw else Expression("const", 0),
+            raw["dir"] if "dir" in raw else None
+        )
 
 
 class AsymmetricBus:
     __repr__ = reflect_repr
-    def __init__(self, desc: str, ctl: str, dev: str, params: list[Parameter], trans: TransSpec, clk: ClockSpec, outs: list[Signal], ins: list[Signal]):
-        self.desc   = desc
-        self.ctl    = ctl
-        self.dev    = dev
-        self.params = params
-        self.trans  = trans
-        self.clk    = clk
-        self.outs   = outs
-        self.ins    = ins
+    def __init__(self, id: str, desc: str, ctl: str, dev: str, params: list[Parameter], trans: TransSpec, clk: ClockSpec, signals: list[Signal]):
+        self.id      = id
+        self.desc    = desc
+        self.ctl     = ctl
+        self.dev     = dev
+        self.params  = params
+        self.trans   = trans
+        self.clk     = clk
+        self.signals = signals
     
     @staticmethod
-    def parse(raw: dict):
-        params = {}
+    def parse(id: str, raw: dict):
+        params = []
         if "parameters" in raw:
             for key in raw["parameters"]:
-                params[key] = Parameter.parse(raw["parameters"][key])
-        outs = {}
-        for key in raw["outputs"]:
-            outs[key] = Signal.parse(raw["outputs"][key])
-        ins = {}
-        for key in raw["inputs"]:
-            ins[key] = Signal.parse(raw["inputs"][key])
+                params.append(Parameter.parse(key, raw["parameters"][key]))
+        signals = []
+        for key in raw["signals"]:
+            signals.append(Signal.parse(key, raw["signals"][key]))
         return AsymmetricBus(
+            id,
             raw["desc"] if "desc" in raw else None,
             raw["controller"],
             raw["device"],
             params,
             TransSpec.parse(raw["transaction"]),
             ClockSpec.parse(raw["clock"]),
-            outs,
-            ins
+            signals
         )
 
 
-f   = open("test/bus.yml")
-raw = yaml.safe_load(f)
-print(AsymmetricBus.parse(raw["bus_a"]))
+def read_file(path):
+    with open(path, "r") as fd:
+        return yaml.safe_load(fd)

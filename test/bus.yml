@@ -25,15 +25,16 @@ bus_a:
     accept:   1
     stall:    0
   
-  outputs:
+  signals:
     re:
-      desc: Read enable
+      desc: Read enable.
+      dir:  output
     addr:
-      desc: Memory address
+      desc: Memory address.
       span: 8
-  
-  inputs:
+      dir:  output
     data:
-      desc: Memory read data
+      desc: Memory read data.
       span: width
+      dir:  input
       time: {$add: [1, latency]}
