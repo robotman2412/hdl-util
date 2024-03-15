@@ -1,7 +1,8 @@
 
 class Writer:
-    def __init__(self, fd, indent = "    ", lftype = "\n"):
+    def __init__(self, fd, onclose = None, indent = "    ", lftype = "\n"):
         self.fd      = fd
+        self.onclose = onclose
         self.indent  = indent
         self.level   = 0
         self.lftype  = lftype
@@ -26,3 +27,9 @@ class Writer:
     def line(self, text):
         self.write(text)
         self.newline()
+    
+    def __enter__(self):
+        return self
+    
+    def __exit__(self, exc_type, exc_value, traceback):
+        if self.onclose: self.onclose(self)

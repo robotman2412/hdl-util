@@ -86,7 +86,7 @@ def line_comment(writer: Writer, text: str):
     for line in text.splitlines():
         writer.line("// " + str(line))
 
-def build_intf(writer: Writer, bus: AsymmetricBus):
+def build_intf(writer: Writer, bus: AsymmetricBus, map: dict):
     if bus.clk.typ == "bus_clock":
         clock = [Signal(bus.clk.sigid, None, Span.default(), Expression("const", 0), "input")]
     else:
@@ -112,3 +112,14 @@ def build_intf(writer: Writer, bus: AsymmetricBus):
             lambda writer: modport(writer, bus, bus.dev, {"input": "output", "output": "input"})
         ]
     ).build(writer)
+
+def build_active(writer: Writer, ent: Crossbar, map: dict):
+    pass
+
+builders = {
+    AsymmetricBus: build_intf,
+    Crossbar:      build_active
+}
+
+def build(writer: Writer, map: dict, id: str):
+    builders[type(map[id])](writer, map[id], map)

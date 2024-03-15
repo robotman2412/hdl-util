@@ -255,6 +255,9 @@ class AsymmetricBus:
         self.clk     = clk
         self.signals = signals
     
+    def analyze(map: dict):
+        pass
+    
     @staticmethod
     def parse(id: str, raw: dict):
         params = []
@@ -276,6 +279,63 @@ class AsymmetricBus:
         )
 
 
+class Arbiter:
+    __repr__ = reflect_repr
+    def __init__(self, typ: str):
+        self.typ = typ
+    
+    @staticmethod
+    def parse(raw: dict):
+        return Arbiter(raw["type"])
+
+
+class Crossbar:
+    __repr__ = reflect_repr
+    def __init__(self, id: str, desc: str, arbiter: Arbiter, busid: str, ctl_count: str|None, dev_count: str|None):
+        self.id        = id
+        self.desc      = desc
+        self.arbiter   = arbiter
+        self.busid     = busid
+        self.bus       = None
+        self.ctl_count = ctl_count
+        self.dev_count = dev_count
+        self.params    = []
+        self.signals   = []
+        self.body      = []
+    
+    def analyze(self, map: dict):
+        self.bus       = map[self.busid]
+        self.ctl_count = self.ctl_count or self.bus.ctl + "_count"
+        self.dev_count = self.dev_count or self.bus.dev + "_count"
+    
+    @staticmethod
+    def parse(id: str, raw: dict):
+        return Crossbar(
+            id,
+            raw["desc"] if "desc" in raw else None,
+            Arbiter.parse(raw["arbiter"]),
+            raw["ctl_count"] if "ctl_count" in raw else None,
+            raw["dev_count"] if "dev_count" in raw else None
+        )
+
+
+parseable = {
+    "asymmetric_bus": AsymmetricBus,
+    "crossbar": Crossbar
+}
+
+
 def read_file(path):
     with open(path, "r") as fd:
         return yaml.safe_load(fd)
+
+def parse_file(path):
+    raw  = read_file(path)
+    map  = {}
+    for k in raw:
+        if "type" not in raw[k]:
+            raise ValueError("Expected type")
+        map[k] = parseable[raw[k]["type"]].parse(k, raw[k])
+    for k in map:
+        map[k].analyze(map)
+    return map

@@ -1,6 +1,7 @@
 
 bus_a:
   type: asymmetric_bus
+  desc: Example pipelined memory bus.
   
   controller: CPU
   device:     MEM
@@ -38,3 +39,21 @@ bus_a:
       span: width
       dir:  input
       time: {$add: [1, latency]}
+
+xbar_a:
+  type: crossbar
+  bus:  bus_a
+  
+  arbiter:
+    type: static_arbiter
+  ctl_count: cpus
+  dev_count: mems
+
+xbar_b:
+  type: crossbar
+  bus:  bus_a
+  
+  arbiter:
+    type: static_arbiter
+  ctl_count: cpus
+  dev_count: mems

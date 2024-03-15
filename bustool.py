@@ -1,10 +1,22 @@
 #!/usr/bin/env python3
 
-import parser, writer, sysverilog, sys
+import parser, writer, sysverilog, sys, argparse
 
-assert __name__ == "__main__"
+def make_writer(path: str):
+    if path == '-':
+        return writer.Writer(sys.stdout)
+    else:
+        return writer.Writer(open(path), lambda x: x.fd.close())
 
-raw = parser.read_file("test/bus.yml")
-bus = parser.AsymmetricBus.parse("bus_a", raw["bus_a"])
-wr  = writer.Writer(sys.stdout)
-sysverilog.build_intf(wr, bus)
+def run(outfile: str, srcfile: str):
+    map = parser.parse_file(srcfile)
+    with make_writer(outfile) as wr:
+        for id in map:
+            sysverilog.build(wr, map, id)
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser("bustool.py")
+    ap.add_argument("--outfile", "-o", action="store", help="The file to output to, - is stdout", default="-")
+    ap.add_argument("srcfile", action="store", help="The bus definition file to process.")
+    args = ap.parse_args()
+    run(args.outfile, args.srcfile)
