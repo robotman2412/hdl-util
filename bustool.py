@@ -12,6 +12,7 @@ def run(outfile: str, srcfile: str):
     map = parser.parse_file(srcfile)
     with make_writer(outfile) as wr:
         for id in map:
+            map[id].generate()
             sysverilog.build(wr, map, id)
 
 if __name__ == "__main__":

@@ -18,6 +18,9 @@ class Entity:
         for signal in self.signals:
             if signal.id in self.vars:
                 raise ValueError(f"Multiple definitions of {signal.id}")
+            if type(signal) is BusInstance:
+                for subsig in signal.bus.signals:
+                    self.vars[f"{signal.id}.{subsig.id}"] = f"{signal.id}.{subsig.id}"
             self.vars[signal.id] = signal.id
     
     def build_param(self, writer: Writer, param: Parameter, suffix: str = ';'):
@@ -25,22 +28,37 @@ class Entity:
             line_comment(writer, param.desc)
         writer.line(f"parameter {param.id} = {param.default}{suffix}")
     
-    def build_signal(self, writer: Writer, signal: Signal, suffix: str = ';', dir: bool = False):
+    def build_signal(self, writer: Writer, signal: Signal|BusInstance, suffix: str = ';', is_port: bool = False):
         if signal.desc:
             line_comment(writer, signal.desc)
-        if dir:
-            writer.write(f"{signal.dir} logic")
+        if type(signal) is BusInstance:
+            writer.write(f"{signal.bus.id}.{signal.bus.ctl if signal.is_ctl else signal.bus.dev}")
         else:
-            writer.write("logic")
-        if not signal.span.is_default():
-            writer.write(f"[{signal.span.msb.build(self.vars)}:{signal.span.lsb.build(self.vars)}]")
-        writer.line(f" {signal.id}{suffix}")
+            if is_port:
+                writer.write(f"{signal.dir} logic")
+            else:
+                writer.write("logic")
+            if not signal.span.is_default():
+                writer.write(f"[{signal.span.msb.build(self.vars)}:{signal.span.lsb.build(self.vars)}]")
+        writer.write(f" {signal.id}{suffix}")
+        if type(signal) is BusInstance:
+            if not (signal.count.typ == "const" and signal.count.args == 1):
+                writer.write(f"[{signal.count.build(self.vars)}]")
+        writer.newline()
     
     def build_body(self, writer: Writer, stmt: Signal|Parameter):
         if type(stmt) is Signal:
             self.build_signal(writer, stmt)
         elif type(stmt) is Parameter:
             self.build_param(writer, stmt)
+        elif type(stmt) is Assign:
+            writer.line(f"assign {self.vars[stmt.var]} = {stmt.val.build(self.vars)};")
+        elif type(stmt) is Block:
+            if stmt.clock:
+                writer.line(f"always @(posedge {self.vars[stmt.clock]}) begin")
+            else:
+                writer.line("always @(*) begin")
+            writer.line("end")
         elif callable(stmt):
             stmt(writer)
         else:
@@ -81,6 +99,7 @@ class Entity:
         
         # End of body.
         writer.line(f"end{self.typ}")
+        writer.line()
 
 def line_comment(writer: Writer, text: str):
     for line in text.splitlines():
@@ -113,13 +132,11 @@ def build_intf(writer: Writer, bus: AsymmetricBus, map: dict):
         ]
     ).build(writer)
 
-def build_active(writer: Writer, ent: Crossbar, map: dict):
-    pass
-
-builders = {
-    AsymmetricBus: build_intf,
-    Crossbar:      build_active
-}
+def build_active(writer: Writer, ent: ActiveEntity, map: dict):
+    Entity("module", ent.id, ent.desc, ent.params, ent.signals, ent.body).build(writer)
 
 def build(writer: Writer, map: dict, id: str):
-    builders[type(map[id])](writer, map[id], map)
+    if type(map[id]) is AsymmetricBus:
+        build_intf(writer, map[id], map)
+    elif issubclass(type(map[id]), ActiveEntity):
+        build_active(writer, map[id], map)

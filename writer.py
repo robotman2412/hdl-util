@@ -18,13 +18,12 @@ class Writer:
         self.curLine += str(text)
     
     def newline(self):
-        if len(self.curLine):
-            self.fd.write(self.indent * self.level)
-            self.fd.write(self.curLine)
-            self.fd.write(self.lftype)
+        self.fd.write(self.indent * self.level)
+        self.fd.write(self.curLine)
+        self.fd.write(self.lftype)
         self.curLine = ""
     
-    def line(self, text):
+    def line(self, text=""):
         self.write(text)
         self.newline()
     

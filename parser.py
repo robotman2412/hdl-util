@@ -178,6 +178,10 @@ class Span:
             return Span(Expression.parse({"$sub": [raw, 1]}), Expression("const", 0))
     
     @staticmethod
+    def width(width: Expression):
+        return Span(Expression(operators["$sub"], [width, Expression("const", 1)]), Expression("const", 0))
+    
+    @staticmethod
     def default():
         return Span(Expression("const", 0), Expression("const", 0))
 
@@ -199,8 +203,8 @@ class ClockSpec:
             raise ValueError("Invalid clock type")
         return ClockSpec(raw["type"], raw["signal"], raw["edge"] == "rising")
     
-    def build(self, ref, parent):
-        return self.sigid if self.typ == "ext_clk" else parent.build_sigref(ref, self.sigid)
+    def build(self, ref):
+        return self.sigid if self.typ == "ext_clk" else f"{ref}.{self.sigid}"
 
 
 class TransSpec:
@@ -223,7 +227,7 @@ class TransSpec:
 
 class Signal:
     __repr__ = reflect_repr
-    def __init__(self, id: str, desc: str, span: Span, time: Expression, dir: str):
+    def __init__(self, id: str, desc: str, span: Span, time: Expression = Expression("const", 0), dir: str = None):
         self.id   = id
         self.desc = desc
         self.span = span
@@ -255,7 +259,9 @@ class AsymmetricBus:
         self.clk     = clk
         self.signals = signals
     
-    def analyze(map: dict):
+    def analyze(self, map: dict):
+        pass
+    def generate(self):
         pass
     
     @staticmethod
@@ -289,13 +295,75 @@ class Arbiter:
         return Arbiter(raw["type"])
 
 
-class Crossbar:
+class BusInstance:
     __repr__ = reflect_repr
-    def __init__(self, id: str, desc: str, arbiter: Arbiter, busid: str, ctl_count: str|None, dev_count: str|None):
+    def __init__(self, id: str, desc: str, bus: AsymmetricBus, is_ctl: bool, count: Expression = Expression("const", 1)):
+        self.id     = id
+        self.desc   = desc
+        self.bus    = bus
+        self.is_ctl = is_ctl
+        self.count  = count
+
+
+class Block:
+    def __init__(self, clock: str = None):
+        self.body  = []
+        self.clock = None
+
+
+class Assign:
+    def __init__(self, var: str, val: Expression):
+        self.var = var
+        self.val = val
+
+
+class If:
+    def __init__(self, cond: Expression):
+        self.cond = cond
+        self.b_elif = []
+        self.b_else = None
+    def ElseIf(self, cond: Expression, body):
+        self.b_elif.append((cond, body))
+        return self
+    def Else(self, body):
+        self.b_else = body
+        return self
+
+
+class For:
+    def __init__(self, init: Expression, cond: Expression, inc: Expression, body):
+        self.init = init
+        self.cond = cond
+        self.inc  = inc
+        self.body = body
+
+
+class While:
+    def __init__(self, cond: Expression, body):
+        self.cond = cond
+        self.body = body
+
+
+class ActiveEntity:
+    __repr__ = reflect_repr
+    def __init__(self):
+        self.params    = []
+        self.signals   = []
+        self.body      = []
+        self.vars      = {}
+    def analyze(self, map: dict):
+        pass
+    def generate(self):
+        raise NotImplementedError()
+
+
+class Crossbar(ActiveEntity):
+    __repr__ = reflect_repr
+    def __init__(self, id: str, desc: str, busid: str, arbiter: Arbiter, ctl_count: str|None, dev_count: str|None):
         self.id        = id
         self.desc      = desc
-        self.arbiter   = arbiter
         self.busid     = busid
+        self.arbiter   = arbiter
         self.bus       = None
         self.ctl_count = ctl_count
         self.dev_count = dev_count
@@ -313,15 +381,64 @@ class Crossbar:
         return Crossbar(
             id,
             raw["desc"] if "desc" in raw else None,
+            raw["bus"],
             Arbiter.parse(raw["arbiter"]),
             raw["ctl_count"] if "ctl_count" in raw else None,
             raw["dev_count"] if "dev_count" in raw else None
         )
+    
+    def generate(self):
+        self.signals.append(BusInstance("ctl", None, self.bus, True))
+        self.signals.append(BusInstance("dev", None, self.bus, False))
+
+
+class BusMux(ActiveEntity):
+    __repr__ = reflect_repr
+    def __init__(self, id: str, desc: str, busid: str, dev_count: str|None, ctl_port: str, dev_port: str):
+        self.id        = id
+        self.desc      = desc
+        self.busid     = busid
+        self.bus       = None
+        self.clock     = None
+        self.dev_count = dev_count
+        self.ctl_port  = ctl_port
+        self.dev_port  = dev_port
+        self.params    = []
+        self.signals   = []
+        self.body      = []
+    
+    def analyze(self, map: dict):
+        self.bus       = map[self.busid]
+        self.dev_count = self.dev_count or self.bus.dev + "_count"
+    
+    @staticmethod
+    def parse(id: str, raw: dict):
+        return BusMux(
+            id,
+            raw["desc"] if "desc" in raw else None,
+            raw["bus"],
+            raw["dev_count"] if "dev_count" in raw else None,
+            raw["ctl_port"] if "ctl_port" in raw else "ctl",
+            raw["dev_port"] if "dev_port" in raw else "dev"
+        )
+    
+    def generate(self):
+        # Module definition.
+        self.params.append(Parameter(self.dev_count, f"Number of {self.bus.ctl} ports.", Expression("const", 2)))
+        if self.bus.clk.typ == "ext_clock":
+            self.signals.append(Signal(self.bus.clk.sigid, None, Span.default(), Expression("const", 0), "input"))
+        clock = self.bus.clk.build(self.ctl_port)
+        self.signals.append(BusInstance(self.ctl_port, None, self.bus, False))
+        self.signals.append(BusInstance(self.dev_port, None, self.bus, True, Expression("var", self.dev_count)))
+        
+        # Selection logic.
+        self.body.append(Signal(f"{self.dev_port}_sel", "Selected device.", Span.width(Expression("var", self.dev_count))))
 
 
 parseable = {
     "asymmetric_bus": AsymmetricBus,
-    "crossbar": Crossbar
+    "crossbar": Crossbar,
+    "multiplexer": BusMux
 }
 
 

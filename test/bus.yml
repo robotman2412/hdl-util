@@ -40,20 +40,10 @@ bus_a:
       dir:  input
       time: {$add: [1, latency]}
 
-xbar_a:
-  type: crossbar
+mux_a:
+  type: multiplexer
+  desc: The MUX?
   bus:  bus_a
-  
-  arbiter:
-    type: static_arbiter
-  ctl_count: cpus
-  dev_count: mems
-
-xbar_b:
-  type: crossbar
-  bus:  bus_a
-  
-  arbiter:
-    type: static_arbiter
-  ctl_count: cpus
+  ctl_port: cpu
+  dev_port: mem
   dev_count: mems
