@@ -29,17 +29,22 @@ bus_a:
   addr: addr
   signals:
     re:
-      desc: Read enable.
-      dir:  output
+      desc:   Read enable.
+      dir:    output
+      masked: Yes
     addr:
-      desc: Memory address.
-      span: 8
-      dir:  output
-    data:
-      desc: Memory read data.
-      span: width
-      dir:  input
-      time: {$add: [1, latency]}
+      desc:   Memory address.
+      span:   8
+      dir:    output
+    wdata:
+      desc:   Memory write data.
+      span:   width
+      dir:    output
+    rdata:
+      desc:   Memory read data.
+      span:   width
+      dir:    input
+      time:   {$add: [1, latency]}
 
 mux_a:
   type: multiplexer

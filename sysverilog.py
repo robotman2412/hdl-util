@@ -3,14 +3,14 @@ from parser import *
 from writer import *
 
 class Entity:
-    def __init__(self, typ: str, id: str, desc: str, params: list[Parameter], signals: list[Signal], body: list):
+    def __init__(self, typ: str, id: str, desc: str, params: list[Parameter], signals: list[Signal], body: list, vars: dict[str] = {}):
         self.typ     = typ
         self.id      = id
         self.desc    = desc
         self.params  = params
         self.signals = signals
         self.body    = body
-        self.vars    = {}
+        self.vars    = vars
         for param in self.params:
             if param.id in self.vars:
                 raise ValueError(f"Multiple definitions of {param.id}")
@@ -22,6 +22,14 @@ class Entity:
                 for subsig in signal.bus.signals:
                     self.vars[f"{signal.id}.{subsig.id}"] = f"{signal.id}.{subsig.id}"
             self.vars[signal.id] = signal.id
+        for stmt in self.body:
+            if type(stmt) in [Signal, Integer, GenVar, BusInstance]:
+                if stmt.id in self.vars:
+                    raise ValueError(f"Multiple definitions of {stmt.id}")
+                self.vars[stmt.id] = stmt.id
+            if type(stmt) is BusInstance:
+                for subsig in stmt.bus.signals:
+                    self.vars[f"{stmt.id}.{subsig.id}"] = f"{stmt.id}.{subsig.id}"
     
     def build_param(self, writer: Writer, param: Parameter, suffix: str = ';'):
         if param.desc:
@@ -91,7 +99,7 @@ class Entity:
                 writer.popIndent()
             writer.line("end")
         elif callable(stmt):
-            stmt(writer)
+            stmt(self.vars, writer)
         else:
             raise ValueError(f"Cannot build {type(stmt)} in block")
     
@@ -126,8 +134,35 @@ class Entity:
                 self.build_block(writer, elem, "assign {} = {};")
             writer.popIndent()
             writer.line("endgenerate")
+        elif type(stmt) is Instance:
+            writer.write(stmt.typ)
+            if stmt.params:
+                writer.line("#(")
+                writer.pushIndent()
+                keys = list(stmt.params.keys())
+                for i in range(len(keys)):
+                    k = keys[i]
+                    v = stmt.params[k]
+                    writer.write(f".{k}({v if type(v) is str else v.build(self.vars)})")
+                    if i < len(stmt.params) - 1:
+                        writer.write(",")
+                    writer.newline()
+                writer.popIndent()
+                writer.write(")")
+            writer.line(f" {stmt.id} (")
+            writer.pushIndent()
+            keys = list(stmt.signals.keys())
+            for i in range(len(keys)):
+                k = keys[i]
+                v = stmt.signals[k]
+                writer.write(f".{k}({v if type(v) is str else v.build(self.vars)})")
+                if i < len(stmt.signals) - 1:
+                    writer.write(",")
+                writer.newline()
+            writer.popIndent()
+            writer.line(");")
         elif callable(stmt):
-            stmt(writer)
+            stmt(self.vars, writer)
         else:
             raise ValueError(f"Cannot build {type(stmt)} in entity body")
     
@@ -194,13 +229,13 @@ def build_intf(writer: Writer, bus: AsymmetricBus, map: dict):
         bus.params,
         clock,
         bus.signals + [
-            lambda writer: modport(writer, bus, bus.ctl, {"input": "input", "output": "output"}),
-            lambda writer: modport(writer, bus, bus.dev, {"input": "output", "output": "input"})
+            lambda vars, writer: modport(writer, bus, bus.ctl, {"input": "input", "output": "output"}),
+            lambda vars, writer: modport(writer, bus, bus.dev, {"input": "output", "output": "input"})
         ]
     ).build(writer)
 
 def build_active(writer: Writer, ent: ActiveEntity, map: dict):
-    Entity("module", ent.id, ent.desc, ent.params, ent.signals, ent.body).build(writer)
+    Entity("module", ent.id, ent.desc, ent.params, ent.signals, ent.body, ent.vars).build(writer)
 
 def build(writer: Writer, map: dict, id: str):
     if type(map[id]) is AsymmetricBus:

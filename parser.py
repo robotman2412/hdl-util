@@ -31,7 +31,9 @@ class Operator:
     
     def build(self, args: list[str]):
         self.check_argc(len(args))
-        if self.builder[0] == '$':
+        if callable(self.builder):
+            return self.builder(self, args)
+        elif self.builder[0] == '$':
             return self.builder + "(" + ", ".join(args) + ")"
         elif self.max_args == 1:
             return self.builder + args[0]
@@ -45,6 +47,29 @@ def _product(args: list[int]):
 
 def _clog2(args: list[int]):
     return math.ceil(math.log2(args[0]))
+
+def _bitslice(args: list[int]):
+    val = args[0]
+    msb = args[1]
+    lsb = args[2]
+    return (val >> lsb) & ((1 << (msb - lsb)) - 1)
+
+def _index(args: list[int]):
+    val = args[0]
+    msb = args[1]
+    return (val >> msb) & 1
+
+def _slb(oper: Operator, args: list[str]):
+    tmp = []
+    for x in args[1:]:
+        if x[0] == '(' and x[-1] == ')':
+            tmp.append(x[1:-1])
+        else:
+            tmp.append(x)
+    return f"{args[0]}[{':'.join(tmp)}]"
+
+def _ifb(oper: Operator, args: list[str]):
+    return f"{args[0]} ? {args[1]} : {args[2]}"
 
 operators = {
     "$sum":   Operator("sum",   8,  "+",  sum),
@@ -60,8 +85,8 @@ operators = {
     "$andb":  Operator("andb",  4,  "&",  lambda x: x[0] &   x[1], 2, 2),
     "$orb":   Operator("orb",   2,  "|",  lambda x: x[0] |   x[1], 2, 2),
     "$xorb":  Operator("xorb",  3,  "^",  lambda x: x[0] ^   x[1], 2, 2),
-    "$shl":   Operator("shl",   7,  "<<", lambda x: x[0] or  x[1], 2, 2),
-    "$shr":   Operator("shr",   7,  ">>", lambda x: x[0] or  x[1], 2, 2),
+    "$shl":   Operator("shl",   7,  "<<", lambda x: x[0] <<  x[1], 2, 2),
+    "$shr":   Operator("shr",   7,  ">>", lambda x: x[0] >>  x[1], 2, 2),
     
     "$add":   Operator("add",   8,  "+",  lambda x: x[0] +  x[1], 2, 2),
     "$sub":   Operator("sub",   8,  "-",  lambda x: x[0] -  x[1], 2, 2),
@@ -76,12 +101,20 @@ operators = {
     "$eq":    Operator("eq",    5,  "==", lambda x: x[0] == x[1], 2, 2),
     "$ne":    Operator("ne",    5,  "!=", lambda x: x[0] != x[1], 2, 2),
     
-    "$set":   Operator("set",   -1, "=",  lambda x: x[1], 2, 2)
+    "$if":    Operator("if",    -1, _ifb, lambda x: x[1] if x[0] else x[2], 3, 3),
+    "$set":   Operator("set",   -2, "=",  lambda x: x[1], 2, 2),
+    "$slice": Operator("slice", 10, _slb, _bitslice, 3, 3),
+    "$index": Operator("index", 10, _slb, _index, 2, 2)
 }
 
 
 class Expression:
-    def __init__(self, typ: str|Operator, args: list|int|str):
+    def __init__(self, typ: str|Operator, args: list|int|str = None):
+        if args == None:
+            args = typ
+            typ  = "raw"
+        if typ in operators:
+            typ = operators[typ]
         self.typ        = typ
         self.args       = args
         self.precedence = 11
@@ -130,6 +163,8 @@ class Expression:
     def build(self, vars: dict = {}):
         if self.typ == "var":
             return vars[self.args]
+        elif self.typ == "raw":
+            return self.args
         elif self.typ == "const":
             return str(self.args)
         elif type(self.typ) is not Operator:
@@ -172,6 +207,9 @@ class Span:
         else:
             self.msb = msb
             self.lsb = lsb
+    
+    def build(self, vars: dict) -> str:
+        return f"[{self.msb.build(vars)}:{self.lsb.build(vars)}]"
     
     def is_default(self) -> bool:
         if self.msb.typ != "const" or self.lsb.typ != "const":
@@ -234,13 +272,14 @@ class TransSpec:
 
 class Signal:
     __repr__ = reflect_repr
-    def __init__(self, id: str, desc: str, span: Span, count = Expression("const", 1), time = Expression("const", 0), dir: str = "input"):
-        self.id    = id
-        self.desc  = desc
-        self.span  = span
-        self.count = count
-        self.time  = time
-        self.dir   = dir
+    def __init__(self, id: str, desc: str, span: Span, count = Expression("const", 1), time = Expression("const", 0), dir: str = "input", masked: bool = False):
+        self.id     = id
+        self.desc   = desc
+        self.span   = span
+        self.count  = count
+        self.time   = time
+        self.dir    = dir
+        self.masked = masked
     
     @staticmethod
     def parse(id, raw):
@@ -252,7 +291,8 @@ class Signal:
             Span.parse(raw["span"]) if "span" in raw else Span.default(),
             Expression.parse(raw["count"]) if "count" in raw else Expression("const", 0),
             Expression.parse(raw["time"]) if "time" in raw else Expression("const", 0),
-            raw["dir"] if "dir" in raw else None
+            raw["dir"] if "dir" in raw else None,
+            raw["masked"] if "masked" in raw else False
         )
 
 
@@ -323,7 +363,7 @@ class BusInstance:
 
 
 class GenVar:
-    def __init__(self, id: str, desc: str):
+    def __init__(self, id: str, desc: str = None):
         self.id   = id
         self.desc = desc
 
@@ -388,6 +428,24 @@ class While:
         self.body = body
 
 
+class Instance:
+    __repr__ = reflect_repr
+    def __init__(self, typ: str, id: str, desc: str = None, params: dict[Expression|str] = {}, signals: dict[Expression] = {}):
+        self.typ     = typ
+        self.id      = id
+        self.desc    = desc
+        self.params  = params
+        self.signals = signals
+
+
+def HuPipelineReg(typ: str, id: str, depth: Expression, clk: Expression, d: Expression, q: Expression):
+    return Instance("hu_pipeline_reg", id, None, {"regtype": typ, "depth": depth}, {"clk": clk, "d": d, "q": q})
+
+
+def HuSelector(typ: str, id: str, width: Expression, sel: Expression, d: Expression, q: Expression):
+    return Instance("hu_selector", id, None, {"seltype": typ, "width": width}, {"sel": sel, "d": d, "q": q})
+
+
 class ActiveEntity:
     __repr__ = reflect_repr
     def __init__(self):
@@ -414,6 +472,7 @@ class Crossbar(ActiveEntity):
         self.params    = []
         self.signals   = []
         self.body      = []
+        self.vars      = {}
     
     def analyze(self, map: dict):
         self.bus       = map[self.busid]
@@ -442,7 +501,7 @@ class BusMux(ActiveEntity):
         self.id        = id
         self.desc      = desc
         self.busid     = busid
-        self.bus       = None
+        self.bus: AsymmetricBus = None
         self.clock     = None
         self.dev_count = dev_count
         self.ctl_port  = ctl_port
@@ -450,11 +509,14 @@ class BusMux(ActiveEntity):
         self.params    = []
         self.signals   = []
         self.body      = []
+        self.vars      = {}
     
     def analyze(self, map: dict):
         self.bus       = map[self.busid]
         self.dev_count = self.dev_count or self.bus.dev + "_count"
         self.addr      = self.bus.getsignal(self.bus.addr)
+        for param in self.bus.params:
+            self.vars[param.id] = f"{self.ctl_port}.{param.id}"
     
     @staticmethod
     def parse(id: str, raw: dict):
@@ -471,10 +533,12 @@ class BusMux(ActiveEntity):
         # Module definition.
         self.params.append(Parameter(self.dev_count, f"Number of {self.bus.ctl} ports.", Expression("const", 2)))
         if self.bus.clk.typ == "ext_clock":
-            self.signals.append(Signal(self.bus.clk.sigid, None, Span.default()))
-        clock = self.bus.clk.build(self.ctl_port)
-        self.signals.append(BusInstance(self.ctl_port, None, self.bus, False))
-        self.signals.append(BusInstance(self.dev_port, None, self.bus, True, Expression("var", self.dev_count)))
+            clock = Signal(self.bus.clk.sigid, "Pipeline clock.", Span.default())
+            self.signals.append(clock)
+        else:
+            clock = Signal(f"{self.ctl_port}.{self.bus.clk.sigid}", None, Span.default())
+        self.signals.append(BusInstance(self.ctl_port, "Controller port.", self.bus, False))
+        self.signals.append(BusInstance(self.dev_port, "Device ports.", self.bus, True, Expression("var", self.dev_count)))
         
         # Addressing logic.
         self.signals.append(Signal(f"map_addr", "Base addresses.", self.addr.span, Expression("var", self.dev_count)))
@@ -483,9 +547,62 @@ class BusMux(ActiveEntity):
         self.body.append(Signal(f"{self.dev_port}_sel", "Selected device.", Span(Expression("var", self.dev_count))))
         self.body.append(GenBlock([
             For.simple("x", Expression("var", self.dev_count), [
-                
+                Assign(f"{self.dev_port}_sel[x]", Expression("$eq", [
+                    Expression("$andb", [
+                        Expression("$index", [Expression("var", "map_addr"), Expression("var", "x")]),
+                        Expression("$index", [Expression("var", "map_mask"), Expression("var", "x")])
+                    ]),
+                    Expression("$andb", [
+                        Expression(f"{self.ctl_port}[x].{self.bus.addr}"),
+                        Expression("$index", [Expression("var", "map_mask"), Expression("var", "x")])
+                    ])
+                ]))
             ])
         ]))
+        
+        # Outgoing connections.
+        ls = []
+        for v in self.bus.signals:
+            if v.dir != "output": continue
+            if v.masked:
+                ls.append(Assign(f"{self.dev_port}[x].{v.id}", Expression("$if", [
+                    Expression("$index", [Expression("var", f"{self.dev_port}_sel"), Expression("var", "x")]),
+                    Expression(f"{self.ctl_port}[x].{v.id}"),
+                    Expression("const", 0)
+                ])))
+            else:
+                ls.append(Assign(f"{self.dev_port}[x].{v.id}", Expression(f"{self.ctl_port}[x].{v.id}")))
+        self.body.append(GenBlock([For.simple("x", Expression("var", self.dev_count), ls)]))
+        
+        # Return connections.
+        for v in self.bus.signals:
+            if v.dir != "input": continue
+            self.body.append(Signal(f"raw_{v.id}", "Raw return signals.", v.span, Expression("var", self.dev_count)))
+        ls = []
+        for v in self.bus.signals:
+            if v.dir != "input": continue
+            ls.append(Assign(f"raw_{v.id}[x]", Expression(f"{self.dev_port}[x].{v.id}")))
+        self.body.append(GenBlock([For.simple("x", Expression("var", self.dev_count), ls)]))
+        for v in self.bus.signals:
+            if v.dir != "input": continue
+            span = Span(Expression("var", self.dev_count))
+            self.body.append(Signal(f"{self.dev_port}_sel_{v.id}", "Delayed selector signals.", span))
+            self.body.append(HuPipelineReg(
+                Expression("$slice", [Expression("bit"), span.msb, span.lsb]),
+                f"plr_{v.id}",
+                v.time if v.time else Expression("const", 0),
+                Expression("var", clock.id),
+                Expression("var", f"{self.dev_port}_sel"),
+                Expression("var", f"{self.dev_port}_sel_{v.id}")
+            ))
+            self.body.append(HuSelector(
+                Expression("$slice", [Expression("bit"), v.span.msb, v.span.lsb]),
+                f"sel_{v.id}",
+                Expression("var", self.dev_count),
+                Expression("var", f"{self.dev_port}_sel_{v.id}"),
+                Expression("var", f"raw_{v.id}"),
+                Expression("var", f"{self.ctl_port}.{v.id}")
+            ))
 
 
 parseable = {
