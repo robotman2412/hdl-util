@@ -75,6 +75,8 @@ operators = {
     "$le":    Operator("le",    6,  "<=", lambda x: x[0] <= x[1], 2, 2),
     "$eq":    Operator("eq",    5,  "==", lambda x: x[0] == x[1], 2, 2),
     "$ne":    Operator("ne",    5,  "!=", lambda x: x[0] != x[1], 2, 2),
+    
+    "$set":   Operator("set",   -1, "=",  lambda x: x[1], 2, 2)
 }
 
 
@@ -158,9 +160,18 @@ class Parameter:
 
 class Span:
     __repr__ = reflect_repr
-    def __init__(self, msb: Expression, lsb: Expression):
-        self.msb   = msb
-        self.lsb   = lsb
+    def __init__(self, msb: Expression = None, lsb: Expression = None):
+        if msb == None and lsb == None:
+            self.msb = self.lsb = Expression("const", 0)
+        elif lsb == None:
+            if msb.typ == "const":
+                self.msb = Expression("const", msb.args-1)
+            else:
+                self.msb = Expression(operators["$sub"], [msb, Expression("const", 1)])
+            self.lsb = Expression("const", 0)
+        else:
+            self.msb = msb
+            self.lsb = lsb
     
     def is_default(self) -> bool:
         if self.msb.typ != "const" or self.lsb.typ != "const":
@@ -175,11 +186,7 @@ class Span:
             s = raw.split('-')
             return Span(int(s[0]), int(s[1]))
         else:
-            return Span(Expression.parse({"$sub": [raw, 1]}), Expression("const", 0))
-    
-    @staticmethod
-    def width(width: Expression):
-        return Span(Expression(operators["$sub"], [width, Expression("const", 1)]), Expression("const", 0))
+            return Span(Expression.parse(raw))
     
     @staticmethod
     def default():
@@ -227,12 +234,13 @@ class TransSpec:
 
 class Signal:
     __repr__ = reflect_repr
-    def __init__(self, id: str, desc: str, span: Span, time: Expression = Expression("const", 0), dir: str = None):
-        self.id   = id
-        self.desc = desc
-        self.span = span
-        self.time = time
-        self.dir  = dir
+    def __init__(self, id: str, desc: str, span: Span, count = Expression("const", 1), time = Expression("const", 0), dir: str = "input"):
+        self.id    = id
+        self.desc  = desc
+        self.span  = span
+        self.count = count
+        self.time  = time
+        self.dir   = dir
     
     @staticmethod
     def parse(id, raw):
@@ -242,6 +250,7 @@ class Signal:
             id,
             raw["desc"] if "desc" in raw else None,
             Span.parse(raw["span"]) if "span" in raw else Span.default(),
+            Expression.parse(raw["count"]) if "count" in raw else Expression("const", 0),
             Expression.parse(raw["time"]) if "time" in raw else Expression("const", 0),
             raw["dir"] if "dir" in raw else None
         )
@@ -249,7 +258,7 @@ class Signal:
 
 class AsymmetricBus:
     __repr__ = reflect_repr
-    def __init__(self, id: str, desc: str, ctl: str, dev: str, params: list[Parameter], trans: TransSpec, clk: ClockSpec, signals: list[Signal]):
+    def __init__(self, id: str, desc: str, ctl: str, dev: str, params: list[Parameter], trans: TransSpec, clk: ClockSpec, addr: str, signals: list[Signal]):
         self.id      = id
         self.desc    = desc
         self.ctl     = ctl
@@ -257,12 +266,19 @@ class AsymmetricBus:
         self.params  = params
         self.trans   = trans
         self.clk     = clk
+        self.addr    = addr
         self.signals = signals
     
     def analyze(self, map: dict):
         pass
     def generate(self):
         pass
+    
+    def getsignal(self, id: str) -> Signal|None:
+        for sig in self.signals:
+            if sig.id == id:
+                return sig
+        return None
     
     @staticmethod
     def parse(id: str, raw: dict):
@@ -281,6 +297,7 @@ class AsymmetricBus:
             params,
             TransSpec.parse(raw["transaction"]),
             ClockSpec.parse(raw["clock"]),
+            raw["addr"] if "addr" in raw else None,
             signals
         )
 
@@ -305,9 +322,26 @@ class BusInstance:
         self.count  = count
 
 
+class GenVar:
+    def __init__(self, id: str, desc: str):
+        self.id   = id
+        self.desc = desc
+
+
+class Integer:
+    def __init__(self, id: str, desc: str):
+        self.id   = id
+        self.desc = desc
+
+
+class GenBlock:
+    def __init__(self, body: list = []):
+        self.body = body
+
+
 class Block:
-    def __init__(self, clock: str = None):
-        self.body  = []
+    def __init__(self, body: list = [], clock: str = None):
+        self.body  = body
         self.clock = None
 
 
@@ -318,8 +352,9 @@ class Assign:
 
 
 class If:
-    def __init__(self, cond: Expression):
+    def __init__(self, cond: Expression, body):
         self.cond = cond
+        self.body = body
         self.b_elif = []
         self.b_else = None
     def ElseIf(self, cond: Expression, body):
@@ -331,11 +366,20 @@ class If:
 
 
 class For:
-    def __init__(self, init: Expression, cond: Expression, inc: Expression, body):
+    def __init__(self, init: Expression, cond: Expression, inc: Expression, body: list):
         self.init = init
         self.cond = cond
         self.inc  = inc
         self.body = body
+    
+    @staticmethod
+    def simple(var: str, limit: Expression, body: list):
+        return For(
+            Expression(operators["$set"], [Expression("var", var), Expression("const", 0)]),
+            Expression(operators["$lt"], [Expression("var", var), limit]),
+            Expression(operators["$set"], [Expression("var", var), Expression(operators["$add"], [Expression("var", var), Expression("const", 1)])]),
+            body
+        )
 
 
 class While:
@@ -410,6 +454,7 @@ class BusMux(ActiveEntity):
     def analyze(self, map: dict):
         self.bus       = map[self.busid]
         self.dev_count = self.dev_count or self.bus.dev + "_count"
+        self.addr      = self.bus.getsignal(self.bus.addr)
     
     @staticmethod
     def parse(id: str, raw: dict):
@@ -426,13 +471,21 @@ class BusMux(ActiveEntity):
         # Module definition.
         self.params.append(Parameter(self.dev_count, f"Number of {self.bus.ctl} ports.", Expression("const", 2)))
         if self.bus.clk.typ == "ext_clock":
-            self.signals.append(Signal(self.bus.clk.sigid, None, Span.default(), Expression("const", 0), "input"))
+            self.signals.append(Signal(self.bus.clk.sigid, None, Span.default()))
         clock = self.bus.clk.build(self.ctl_port)
         self.signals.append(BusInstance(self.ctl_port, None, self.bus, False))
         self.signals.append(BusInstance(self.dev_port, None, self.bus, True, Expression("var", self.dev_count)))
         
-        # Selection logic.
-        self.body.append(Signal(f"{self.dev_port}_sel", "Selected device.", Span.width(Expression("var", self.dev_count))))
+        # Addressing logic.
+        self.signals.append(Signal(f"map_addr", "Base addresses.", self.addr.span, Expression("var", self.dev_count)))
+        self.signals.append(Signal(f"map_mask", "Address bitmasks.", self.addr.span, Expression("var", self.dev_count)))
+        self.body.append(GenVar("x"))
+        self.body.append(Signal(f"{self.dev_port}_sel", "Selected device.", Span(Expression("var", self.dev_count))))
+        self.body.append(GenBlock([
+            For.simple("x", Expression("var", self.dev_count), [
+                
+            ])
+        ]))
 
 
 parseable = {

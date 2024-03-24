@@ -28,6 +28,11 @@ class Entity:
             line_comment(writer, param.desc)
         writer.line(f"parameter {param.id} = {param.default}{suffix}")
     
+    def build_var(self, writer: Writer, var: GenVar|Integer, typ: str):
+        if var.desc:
+            line_comment(writer, var.desc)
+        writer.line(f"{typ} {var.id};")
+    
     def build_signal(self, writer: Writer, signal: Signal|BusInstance, suffix: str = ';', is_port: bool = False):
         if signal.desc:
             line_comment(writer, signal.desc)
@@ -40,29 +45,91 @@ class Entity:
                 writer.write("logic")
             if not signal.span.is_default():
                 writer.write(f"[{signal.span.msb.build(self.vars)}:{signal.span.lsb.build(self.vars)}]")
-        writer.write(f" {signal.id}{suffix}")
-        if type(signal) is BusInstance:
-            if not (signal.count.typ == "const" and signal.count.args == 1):
-                writer.write(f"[{signal.count.build(self.vars)}]")
-        writer.newline()
+        writer.write(f" {signal.id}")
+        if not (signal.count.typ == "const" and signal.count.args == 1):
+            writer.write(f"[{signal.count.build(self.vars)}]")
+        writer.line(suffix)
     
-    def build_body(self, writer: Writer, stmt: Signal|Parameter):
+    def build_block(self, writer: Writer, stmt, assign: str):
+        if type(stmt) is GenVar:
+            self.build_var(writer, stmt, "genvar")
+        elif type(stmt) is Integer:
+            self.build_var(writer, stmt, "integer")
+        elif type(stmt) is Assign:
+            writer.line(assign.format(stmt.var, stmt.val.build(self.vars)))
+        elif type(stmt) is For:
+            writer.line(f"for ({stmt.init.build(self.vars)}; {stmt.cond.build(self.vars)}; {stmt.inc.build(self.vars)}) begin")
+            writer.pushIndent()
+            for elem in stmt.body:
+                self.build_block(writer, elem, assign)
+            writer.popIndent()
+            writer.line("end")
+        elif type(stmt) is While:
+            writer.line(f"while ({stmt.cond.build(self.vars)}) begin")
+            writer.pushIndent()
+            for elem in stmt.body:
+                self.build_block(writer, elem, assign)
+            writer.popIndent()
+            writer.line("end")
+        elif type(stmt) is If:
+            writer.line(f"if ({stmt.cond.build(self.vars)}) begin")
+            writer.pushIndent()
+            for elem in stmt.body:
+                self.build_block(writer, elem, assign)
+            writer.popIndent()
+            for entry in stmt.b_elif:
+                writer.line(f"end else if ({entry[0].build(self.vars)}) begin")
+                writer.pushIndent()
+                for elem in entry[1]:
+                    self.build_block(writer, elem, assign)
+                writer.popIndent()
+            if stmt.b_else:
+                writer.line("end else begin")
+                writer.pushIndent()
+                for elem in stmt.b_else:
+                    self.build_block(writer, elem, assign)
+                writer.popIndent()
+            writer.line("end")
+        elif callable(stmt):
+            stmt(writer)
+        else:
+            raise ValueError(f"Cannot build {type(stmt)} in block")
+    
+    def build_body(self, writer: Writer, stmt):
         if type(stmt) is Signal:
             self.build_signal(writer, stmt)
         elif type(stmt) is Parameter:
             self.build_param(writer, stmt)
+        elif type(stmt) is GenVar:
+            self.build_var(writer, stmt, "genvar")
+        elif type(stmt) is Integer:
+            self.build_var(writer, stmt, "integer")
         elif type(stmt) is Assign:
             writer.line(f"assign {self.vars[stmt.var]} = {stmt.val.build(self.vars)};")
         elif type(stmt) is Block:
             if stmt.clock:
                 writer.line(f"always @(posedge {self.vars[stmt.clock]}) begin")
+                writer.pushIndent()
+                for elem in stmt.body:
+                    self.build_block(writer, elem, "{} <= {};")
             else:
                 writer.line("always @(*) begin")
+                writer.pushIndent()
+                for elem in stmt.body:
+                    self.build_block(writer, elem, "{} = {};")
+            writer.popIndent()
             writer.line("end")
+        elif type(stmt) is GenBlock:
+            writer.line("generate")
+            writer.pushIndent()
+            for elem in stmt.body:
+                self.build_block(writer, elem, "assign {} = {};")
+            writer.popIndent()
+            writer.line("endgenerate")
         elif callable(stmt):
             stmt(writer)
         else:
-            stmt.build(writer)
+            raise ValueError(f"Cannot build {type(stmt)} in entity body")
     
     def build(self, writer: Writer):
         # Start of definition.

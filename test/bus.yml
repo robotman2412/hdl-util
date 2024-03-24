@@ -26,6 +26,7 @@ bus_a:
     accept:   1
     stall:    0
   
+  addr: addr
   signals:
     re:
       desc: Read enable.
