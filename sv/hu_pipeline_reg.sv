@@ -10,7 +10,7 @@ module hu_pipeline_reg#(
     type      regtype   = bit[7:0]
 )(
     // Pipeline clock.
-    input  logic    clk,
+    input  wire     clk,
     // Input data.
     input  regtype  d,
     // Output data.

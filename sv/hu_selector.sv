@@ -10,7 +10,7 @@ module hu_selector#(
     type      seltype   = bit[7:0]
 )(
     // Selector.
-    input  logic[width-1:0] sel,
+    input  wire [width-1:0] sel,
     // Input data.
     input  seltype          d[width],
     // Output data.
